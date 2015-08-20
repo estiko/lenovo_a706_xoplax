@@ -53,7 +53,7 @@ static int update_cpu_max_freq(int cpu, uint32_t max_freq)
 static void check_temp(struct work_struct *work)
 {
 	struct tsens_device tsens_dev;
-	unsigned long temp = 0;
+	long temp = 0;
 	uint32_t max_freq = limited_max_freq;
 	int cpu = 0;
 	int ret = 0;
