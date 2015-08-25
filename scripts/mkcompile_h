@@ -73,7 +73,7 @@ UTS_TRUNCATE="cut -b -$UTS_LEN"
 
   echo \#define UTS_VERSION \"`echo $UTS_VERSION | $UTS_TRUNCATE`\"
 
-  echo \#define LINUX_COMPILE_BY \"Estiko-Yosef\"
+  echo \#define LINUX_COMPILE_BY \"XoplaX-Dev\"
   echo \#define LINUX_COMPILE_HOST \"jenkins-buildbot\"
 
   echo \#define LINUX_COMPILER \"`$CC -v 2>&1 | tail -n 1`\"
