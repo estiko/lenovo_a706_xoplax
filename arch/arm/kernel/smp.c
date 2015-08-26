@@ -205,7 +205,7 @@ void __ref cpu_die(void)
 	idle_task_exit();
 
 	local_irq_disable();
-	flush_cache_louis();
+	mb();
 
 	/* Tell __cpu_die() that this CPU is now safe to dispose of */
 	RCU_NONIDLE(complete(&cpu_died));
@@ -214,8 +214,6 @@ void __ref cpu_die(void)
 	 * actual CPU shutdown procedure is at least platform (if not
 	 * CPU) specific.
 	 */
-	flush_cache_louis();
-
 	platform_cpu_die(cpu);
 
 	/*
@@ -264,10 +262,9 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	enter_lazy_tlb(mm, current);
 	local_flush_tlb_all();
 
-	cpu_init();
-
 	pr_debug("CPU%u: Booted secondary processor\n", cpu);
 
+	cpu_init();
 	preempt_disable();
 	trace_hardirqs_off();
 
@@ -323,7 +320,6 @@ void __init smp_prepare_boot_cpu(void)
 {
 	unsigned int cpu = smp_processor_id();
 
-	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
 	per_cpu(cpu_data, cpu).idle = current;
 }
 
@@ -398,7 +394,7 @@ void show_ipi_list(struct seq_file *p, int prec)
 	for (i = 0; i < NR_IPI; i++) {
 		seq_printf(p, "%*s%u: ", prec - 1, "IPI", i);
 
-		for_each_online_cpu(cpu)
+		for_each_present_cpu(cpu)
 			seq_printf(p, "%10u ",
 				   __get_irq_stat(cpu, ipi_irqs[i]));
 
