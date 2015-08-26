@@ -12,7 +12,9 @@
 /* On pre-ARMv6 hardware the swp based implementation is the most efficient. */
 # include <asm-generic/mutex-xchg.h>
 #else
-
+#include <asm-generic/mutex-dec.h>
+#endif
+#endif	/* _ASM_MUTEX_H */
 /*
  * Attempting to lock a mutex on ARMv6+ can be done with a bastardized
  * atomic decrement (it is not a reliable atomic decrement but it satisfies
