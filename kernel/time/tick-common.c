@@ -82,19 +82,18 @@ static void tick_periodic(int cpu)
 void tick_handle_periodic(struct clock_event_device *dev)
 {
 	int cpu = smp_processor_id();
-	ktime_t next = dev->next_event;
+	ktime_t next;
 
 	tick_periodic(cpu);
 
 	if (dev->mode != CLOCK_EVT_MODE_ONESHOT)
 		return;
+	/*
+	 * Setup the next period for devices, which do not have
+	 * periodic mode:
+	 */
+	next = ktime_add(dev->next_event, tick_period);
 	for (;;) {
-		/*
-		 * Setup the next period for devices, which do not have
-		 * periodic mode:
-		 */
-		next = ktime_add(next, tick_period);
-
 		if (!clockevents_program_event(dev, next, false))
 			return;
 		/*
@@ -108,6 +107,7 @@ void tick_handle_periodic(struct clock_event_device *dev)
 		 */
 		if (timekeeping_valid_for_hres())
 			tick_periodic(cpu);
+		next = ktime_add(next, tick_period);
 	}
 }
 
