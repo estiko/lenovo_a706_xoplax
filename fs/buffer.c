@@ -857,6 +857,8 @@ try_again:
 
 		/* Link the buffer to its page */
 		set_bh_page(bh, page, offset);
+
+		init_buffer(bh, NULL, NULL);
 	}
 	return head;
 /*
