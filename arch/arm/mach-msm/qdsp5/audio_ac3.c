@@ -186,8 +186,10 @@ static void audac3_send_data(struct audio *audio, unsigned needed);
 static void audac3_dsp_event(void *private, unsigned id, uint16_t *msg);
 static void audac3_config_hostpcm(struct audio *audio);
 static void audac3_buffer_refresh(struct audio *audio);
+#ifdef CONFIG_HAS_EARLYSUSPEND
 static void audac3_post_event(struct audio *audio, int type,
 		union msm_audio_event_payload payload);
+#endif
 
 static int rmt_put_resource(struct audio *audio)
 {

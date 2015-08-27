@@ -647,6 +647,7 @@ static long audio_voicememo_ioctl(struct file *file,
 		mutex_lock(&audio->dsp_lock);
 		stats.byte_count = audio->byte_count;
 		stats.sample_count = audio->frame_count;
+		memset(&stats, 0, sizeof(stats));
 		mutex_unlock(&audio->dsp_lock);
 		if (copy_to_user((void *) arg, &stats, sizeof(stats)))
 			return -EFAULT;
