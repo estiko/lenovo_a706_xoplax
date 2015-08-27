@@ -1554,28 +1554,6 @@ void unmap_underlying_metadata(struct block_device *bdev, sector_t block)
 EXPORT_SYMBOL(unmap_underlying_metadata);
 
 /*
- * Size is a power-of-two in the range 512..PAGE_SIZE,
- * and the case we care about most is PAGE_SIZE.
- *
- * So this *could* possibly be written with those
- * constraints in mind (relevant mostly if some
- * architecture has a slow bit-scan instruction)
- */
-static inline int block_size_bits(unsigned int blocksize)
-{
-	return ilog2(blocksize);
-}
-
-static struct buffer_head *create_page_buffers(struct page *page, struct inode *inode, unsigned int b_state)
-{
-	BUG_ON(!PageLocked(page));
-
-	if (!page_has_buffers(page))
-		create_empty_buffers(page, 1 << ACCESS_ONCE(inode->i_blkbits), b_state);
-	return page_buffers(page);
-}
-
-/*
  * NOTE! All mapped/uptodate combinations are valid:
  *
  *	Mapped	Uptodate	Meaning
@@ -1612,13 +1590,19 @@ static int __block_write_full_page(struct inode *inode, struct page *page,
 	sector_t block;
 	sector_t last_block;
 	struct buffer_head *bh, *head;
-	unsigned int blocksize, bbits;
+	const unsigned blocksize = 1 << inode->i_blkbits;
 	int nr_underway = 0;
 	int write_op = (wbc->sync_mode == WB_SYNC_ALL ?
 			WRITE_SYNC : WRITE);
 
-	head = create_page_buffers(page, inode,
+	BUG_ON(!PageLocked(page));
+
+	last_block = (i_size_read(inode) - 1) >> inode->i_blkbits;
+
+	if (!page_has_buffers(page)) {
+		create_empty_buffers(page, blocksize,
 					(1 << BH_Dirty)|(1 << BH_Uptodate));
+	}
 
 	/*
 	 * Be very careful.  We have no exclusion from __set_page_dirty_buffers
@@ -1630,12 +1614,9 @@ static int __block_write_full_page(struct inode *inode, struct page *page,
 	 * handle that here by just cleaning them.
 	 */
 
+	block = (sector_t)page->index << (PAGE_CACHE_SHIFT - inode->i_blkbits);
+	head = page_buffers(page);
 	bh = head;
-	blocksize = bh->b_size;
-	bbits = block_size_bits(blocksize);
-
-	block = (sector_t)page->index << (PAGE_CACHE_SHIFT - bbits);
-	last_block = (i_size_read(inode) - 1) >> bbits;
 
 	/*
 	 * Get all the dirty buffers mapped to disk addresses and
@@ -1826,10 +1807,12 @@ int __block_write_begin(struct page *page, loff_t pos, unsigned len,
 	BUG_ON(to > PAGE_CACHE_SIZE);
 	BUG_ON(from > to);
 
-	head = create_page_buffers(page, inode, 0);
-	blocksize = head->b_size;
-	bbits = block_size_bits(blocksize);
+	blocksize = 1 << inode->i_blkbits;
+	if (!page_has_buffers(page))
+		create_empty_buffers(page, blocksize, 0);
+	head = page_buffers(page);
 
+	bbits = inode->i_blkbits;
 	block = (sector_t)page->index << (PAGE_CACHE_SHIFT - bbits);
 
 	for(bh = head, block_start = 0; bh != head || !block_start;
@@ -1899,11 +1882,11 @@ static int __block_commit_write(struct inode *inode, struct page *page,
 	unsigned blocksize;
 	struct buffer_head *bh, *head;
 
-	bh = head = page_buffers(page);
-	blocksize = bh->b_size;
+	blocksize = 1 << inode->i_blkbits;
 
-	block_start = 0;
-	do {
+	for(bh = head = page_buffers(page), block_start = 0;
+	    bh != head || !block_start;
+	    block_start=block_end, bh = bh->b_this_page) {
 		block_end = block_start + blocksize;
 		if (block_end <= from || block_start >= to) {
 			if (!buffer_uptodate(bh))
@@ -1913,10 +1896,7 @@ static int __block_commit_write(struct inode *inode, struct page *page,
 			mark_buffer_dirty(bh);
 		}
 		clear_buffer_new(bh);
-
-		block_start = block_end;
-		bh = bh->b_this_page;
-	} while (bh != head);
+	}
 
 	/*
 	 * If this is a partial write which happened to make all buffers
@@ -2041,6 +2021,7 @@ EXPORT_SYMBOL(generic_write_end);
 int block_is_partially_uptodate(struct page *page, read_descriptor_t *desc,
 					unsigned long from)
 {
+	struct inode *inode = page->mapping->host;
 	unsigned block_start, block_end, blocksize;
 	unsigned to;
 	struct buffer_head *bh, *head;
@@ -2049,13 +2030,13 @@ int block_is_partially_uptodate(struct page *page, read_descriptor_t *desc,
 	if (!page_has_buffers(page))
 		return 0;
 
-	head = page_buffers(page);
-	blocksize = head->b_size;
+	blocksize = 1 << inode->i_blkbits;
 	to = min_t(unsigned, PAGE_CACHE_SIZE - from, desc->count);
 	to = from + to;
 	if (from < blocksize && to > PAGE_CACHE_SIZE - blocksize)
 		return 0;
 
+	head = page_buffers(page);
 	bh = head;
 	block_start = 0;
 	do {
@@ -2088,16 +2069,18 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	struct inode *inode = page->mapping->host;
 	sector_t iblock, lblock;
 	struct buffer_head *bh, *head, *arr[MAX_BUF_PER_PAGE];
-	unsigned int blocksize, bbits;
+	unsigned int blocksize;
 	int nr, i;
 	int fully_mapped = 1;
 
-	head = create_page_buffers(page, inode, 0);
-	blocksize = head->b_size;
-	bbits = block_size_bits(blocksize);
+	BUG_ON(!PageLocked(page));
+	blocksize = 1 << inode->i_blkbits;
+	if (!page_has_buffers(page))
+		create_empty_buffers(page, blocksize, 0);
+	head = page_buffers(page);
 
-	iblock = (sector_t)page->index << (PAGE_CACHE_SHIFT - bbits);
-	lblock = (i_size_read(inode)+blocksize-1) >> bbits;
+	iblock = (sector_t)page->index << (PAGE_CACHE_SHIFT - inode->i_blkbits);
+	lblock = (i_size_read(inode)+blocksize-1) >> inode->i_blkbits;
 	bh = head;
 	nr = 0;
 	i = 0;
