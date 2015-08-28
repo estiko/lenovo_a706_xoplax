@@ -485,10 +485,6 @@ struct msmfb_mdp_pp {
 };
 
 
-struct mdp_page_protection {
-	uint32_t page_protection;
-};
-
 #define MDP_MAX_FENCE_FD	10
 #define MDP_BUF_SYNC_FLAG_WAIT	1
 
