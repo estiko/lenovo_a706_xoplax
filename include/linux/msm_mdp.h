@@ -486,7 +486,6 @@ struct msmfb_mdp_pp {
 
 
 #define MDP_MAX_FENCE_FD	10
-#define MDP_BUF_SYNC_FLAG_WAIT	1
 
 struct mdp_buf_sync {
 	uint32_t flags;
@@ -502,8 +501,10 @@ struct mdp_buf_fence {
 	int rel_fen_fd[MDP_MAX_FENCE_FD];
 };
 
+#define MDP_DISPLAY_COMMIT_OVERLAY 0x00000001
+
 struct mdp_display_commit {
-	uint32_t flags;
+uint32_t flags;
 	uint32_t wait_for_finish;
 	struct fb_var_screeninfo var;
 	struct mdp_buf_fence buf_fence;
