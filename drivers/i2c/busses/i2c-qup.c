@@ -86,7 +86,7 @@ enum {
 	QUP_MX_INPUT_DONE       = 1U << 11,
 };
 
-/* I2C mini core related values */
+/* QUP_CONFIG values and flags */
 enum {
 	I2C_MINI_CORE           = 2U << 8,
 	I2C_N_VAL               = 0xF,
@@ -452,8 +452,7 @@ static void i2c_qup_clk_path_unvote(struct qup_i2c_dev *dev)
  * This function may be called more then once before register succeed. At
  * this case only one error message will be logged. At boot time all clocks
  * are on, so earlier i2c transactions should succeed.
-  */
-
+ */
 static void i2c_qup_clk_path_postponed_register(struct qup_i2c_dev *dev)
 {
 	/*
@@ -896,6 +895,8 @@ static void qup_i2c_recover_bus_busy(struct qup_i2c_dev *dev)
 	uint32_t status = readl_relaxed(dev->base + QUP_I2C_STATUS);
 	struct gpiomux_setting old_gpio_setting[ARRAY_SIZE(i2c_rsrcs)];
 
+	if (dev->pdata->msm_i2c_config_gpio)
+		return;
 
 	if (!(status & (I2C_STATUS_BUS_ACTIVE)) ||
 		(status & (I2C_STATUS_BUS_MASTER)))
@@ -996,6 +997,7 @@ qup_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	} else {
 		pm_runtime_get_sync(dev->dev);
 	}
+
 
 	if (dev->pdata->clk_ctl_xfer)
 		i2c_qup_pm_resume_clk(dev);
@@ -1422,6 +1424,7 @@ qup_i2c_probe(struct platform_device *pdev)
 		pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
 		if (!pdata)
 			return -ENOMEM;
+
 		ret = msm_i2c_rsrcs_dt_to_pdata_map(pdev, pdata, dt_gpios);
 		if (ret)
 			goto get_res_failed;
@@ -1769,8 +1772,9 @@ static int i2c_qup_pm_suspend_runtime(struct device *device)
 {
 	struct platform_device *pdev = to_platform_device(device);
 	struct qup_i2c_dev *dev = platform_get_drvdata(pdev);
-	dev_dbg(device, "pm_runtime: 
+	dev_dbg(device, "pm_runtime: suspending...\n");
 	i2c_qup_pm_suspend(dev);
+	return 0;
 }
 
 static int i2c_qup_pm_resume_runtime(struct device *device)
@@ -1781,6 +1785,7 @@ static int i2c_qup_pm_resume_runtime(struct device *device)
 	i2c_qup_pm_resume(dev);
 	return 0;
 }
+
 static int i2c_qup_pm_suspend_sys(struct device *device)
 {
 	struct platform_device *pdev = to_platform_device(device);
