@@ -541,7 +541,10 @@ struct msm_i2c_platform_data {
 	int aux_dat;
 	int src_clk_rate;
 	int use_gsbi_shared_mode;
+	bool clk_ctl_xfer;
 	void (*msm_i2c_config_gpio)(int iface, int config_type);
+	bool active_only;
+	uint32_t master_id;
 };
 
 struct msm_i2c_ssbi_platform_data {
