@@ -101,7 +101,7 @@ static bool unescape_octal(char **src, char **dst)
 	char *p = *dst, *q = *src;
 	u8 num;
 
-	if (isodigit(*q) == 0)
+	if (isdigit(*q) == 0)
 		return false;
 
 	num = (*q++) & 7;
