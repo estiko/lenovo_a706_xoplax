@@ -105,7 +105,7 @@ static bool unescape_octal(char **src, char **dst)
 		return false;
 
 	num = (*q++) & 7;
-	while (num < 32 && isodigit(*q) && (q - *src < 3)) {
+	while (num < 32 && isdigit(*q) && (q - *src < 3)) {
 		num <<= 3;
 		num += (*q++) & 7;
 	}
