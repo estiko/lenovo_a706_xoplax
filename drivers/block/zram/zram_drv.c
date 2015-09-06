@@ -152,6 +152,8 @@ static ssize_t max_comp_streams_store(struct device *dev,
 	}
 
 	zram->max_comp_streams = num;
+	ret = len;
+out:
 	up_write(&zram->init_lock);
 	return ret;
 }
