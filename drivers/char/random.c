@@ -984,7 +984,7 @@ retry:
 			goto retry;
 
 		if ((r->entropy_count >> ENTROPY_SHIFT)
-		    < random_write_wakeup_thresh) {
+		    < random_write_wakeup_thresh)
 			wakeup_write = 1;
 	}
 
