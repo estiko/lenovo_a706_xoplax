@@ -134,6 +134,7 @@ static ssize_t max_comp_streams_store(struct device *dev,
 {
 	int num;
 	struct zram *zram = dev_to_zram(dev);
+	int ret;
 
 	ret = kstrtoint(buf, 0, &num);
 	if (ret < 0)
