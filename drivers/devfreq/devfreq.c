@@ -91,7 +91,7 @@ int update_devfreq(struct devfreq *devfreq)
 	}
 
 	/* Reevaluate the proper frequency */
-	err = devfreq->governor->get_target_freq(devfreq, &freq, &flags);
+	err = devfreq->governor->get_target_freq(devfreq, &freq);
 	if (err)
 		return err;
 
