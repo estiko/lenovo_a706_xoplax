@@ -626,8 +626,9 @@ retry:
 		}
 	}
 
-	trace_credit_entropy_bits(r->name, nbits, entropy_count,
-				  r->entropy_total, _RET_IP_);
+ 	trace_credit_entropy_bits(r->name, nbits,
+ 				  entropy_count >> ENTROPY_SHIFT,
+ 				  r->entropy_total, _RET_IP_);
 
 	if (r == &input_pool) {
 		int entropy_bytes = entropy_count >> ENTROPY_SHIFT;
