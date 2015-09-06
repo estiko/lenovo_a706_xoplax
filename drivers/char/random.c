@@ -250,7 +250,6 @@
 #include <linux/fips.h>
 #include <linux/ptrace.h>
 #include <linux/kmemcheck.h>
-#include <linux/workqueue.h>
 
 #ifdef CONFIG_GENERIC_HARDIRQS
 # include <linux/irq.h>
@@ -297,7 +296,7 @@ static int random_read_wakeup_thresh = 64;
  * should wake up processes which are selecting or polling on write
  * access to /dev/random.
  */
-static int random_write_wakeup_thresh = 28 * OUTPUT_POOL_WORDS;
+static int random_write_wakeup_thresh = 128;
 
 /*
  * The minimum number of seconds between urandom pool resending.  We
@@ -305,6 +304,15 @@ static int random_write_wakeup_thresh = 28 * OUTPUT_POOL_WORDS;
  * input pool even if there are heavy demands on /dev/urandom.
  */
 static int random_min_urandom_seed = 60;
+
+/*
+ * When the input pool goes over trickle_thresh, start dropping most
+ * samples to avoid wasting CPU time and reduce lock contention.
+ */
+
+static const int trickle_thresh = (INPUT_POOL_WORDS * 28) << ENTROPY_SHIFT;
+
+static DEFINE_PER_CPU(int, trickle_count);
 
 /*
  * A pool of size .poolwords is stirred with a primitive polynomial
@@ -320,12 +328,10 @@ static struct poolinfo {
 #define S(x) ilog2(x)+5, (x), (x)*4, (x)*32, (x) << (ENTROPY_SHIFT+5)
 	int tap1, tap2, tap3, tap4, tap5;
 } poolinfo_table[] = {
-	/* was: x^128 + x^103 + x^76 + x^51 +x^25 + x + 1 */
-	/* x^128 + x^104 + x^76 + x^51 +x^25 + x + 1 */
-	{ S(128),	104,	76,	51,	25,	1 },
-	/* was: x^32 + x^26 + x^20 + x^14 + x^7 + x + 1 */
-	/* x^32 + x^26 + x^19 + x^14 + x^7 + x + 1 */
-	{ S(32),	26,	19,	14,	7,	1 },
+	/* x^128 + x^103 + x^76 + x^51 +x^25 + x + 1 -- 105 */
+	{ S(128),	103,	76,	51,	25,	1 },
+	/* x^32 + x^26 + x^20 + x^14 + x^7 + x + 1 -- 15 */
+	{ S(32),	26,	20,	14,	7,	1 },
 #if 0
 	/* x^2048 + x^1638 + x^1231 + x^819 + x^411 + x + 1  -- 115 */
 	{ S(2048),	1638,	1231,	819,	411,	1 },
@@ -354,6 +360,49 @@ static struct poolinfo {
 	{ S(64),	52,	39,	26,	14,	1 },
 #endif
 };
+
+/*
+ * For the purposes of better mixing, we use the CRC-32 polynomial as
+ * well to make a twisted Generalized Feedback Shift Reigster
+ *
+ * (See M. Matsumoto & Y. Kurita, 1992.  Twisted GFSR generators.  ACM
+ * Transactions on Modeling and Computer Simulation 2(3):179-194.
+ * Also see M. Matsumoto & Y. Kurita, 1994.  Twisted GFSR generators
+ * II.  ACM Transactions on Mdeling and Computer Simulation 4:254-266)
+ *
+ * Thanks to Colin Plumb for suggesting this.
+ *
+ * We have not analyzed the resultant polynomial to prove it primitive;
+ * in fact it almost certainly isn't.  Nonetheless, the irreducible factors
+ * of a random large-degree polynomial over GF(2) are more than large enough
+ * that periodicity is not a concern.
+ *
+ * The input hash is much less sensitive than the output hash.  All
+ * that we want of it is that it be a good non-cryptographic hash;
+ * i.e. it not produce collisions when fed "random" data of the sort
+ * we expect to see.  As long as the pool state differs for different
+ * inputs, we have preserved the input entropy and done a good job.
+ * The fact that an intelligent attacker can construct inputs that
+ * will produce controlled alterations to the pool's state is not
+ * important because we don't consider such inputs to contribute any
+ * randomness.  The only property we need with respect to them is that
+ * the attacker can't increase his/her knowledge of the pool's state.
+ * Since all additions are reversible (knowing the final state and the
+ * input, you can reconstruct the initial state), if an attacker has
+ * any uncertainty about the initial state, he/she can only shuffle
+ * that uncertainty about, but never cause any collisions (which would
+ * decrease the uncertainty).
+ *
+ * The chosen system lets the state of the pool be (essentially) the input
+ * modulo the generator polymnomial.  Now, for random primitive polynomials,
+ * this is a universal class of hash functions, meaning that the chance
+ * of a collision is limited by the attacker's knowledge of the generator
+ * polynomail, so if it is chosen at random, an attacker can never force
+ * a collision.  Here, we use a fixed polynomial, but we *can* assume that
+ * ###--> it is unknown to the processes generating the input entropy. <-###
+ * Because of this important property, this is a good, collision-resistant
+ * hash; hash collisions will occur no more often than chance.
+ */
 
 /*
  * Static global variables
@@ -387,7 +436,6 @@ struct entropy_store {
 	__u32 *pool;
 	const char *name;
 	struct entropy_store *pull;
-	struct work_struct push_work;
 
 	/* read-write data: */
 	unsigned long last_pulled;
@@ -402,7 +450,6 @@ struct entropy_store {
 	__u8 last_data[EXTRACT_SIZE];
 };
 
-static void push_to_pool(struct work_struct *work);
 static __u32 input_pool_data[INPUT_POOL_WORDS];
 static __u32 blocking_pool_data[OUTPUT_POOL_WORDS];
 static __u32 nonblocking_pool_data[OUTPUT_POOL_WORDS];
@@ -421,9 +468,7 @@ static struct entropy_store blocking_pool = {
 	.limit = 1,
 	.pull = &input_pool,
 	.lock = __SPIN_LOCK_UNLOCKED(blocking_pool.lock),
-	.pool = blocking_pool_data,
-	.push_work = __WORK_INITIALIZER(blocking_pool.push_work,
-					push_to_pool),
+	.pool = blocking_pool_data
 };
 
 static struct entropy_store nonblocking_pool = {
@@ -617,48 +662,21 @@ retry:
 	if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
 		goto retry;
 
-	r->entropy_total += nbits;
 	if (!r->initialized && nbits > 0) {
-		if (r->entropy_total > 128) {
+		r->entropy_total += nbits;
+		if (r->entropy_total > 128)
 			r->initialized = 1;
-			r->entropy_total = 0;
-		}
 	}
 
 	trace_credit_entropy_bits(r->name, nbits,
 				  entropy_count >> ENTROPY_SHIFT,
 				  r->entropy_total, _RET_IP_);
 
-	if (r == &input_pool) {
-		int entropy_bytes = entropy_count >> ENTROPY_SHIFT;
-
-		/* should we wake readers? */
-		if (entropy_bytes >= random_read_wakeup_thresh) {
-			wake_up_interruptible(&random_read_wait);
-			kill_fasync(&fasync, SIGIO, POLL_IN);
-		}
-		/* If the input pool is getting full, send some
-		 * entropy to the two output pools, flipping back and
-		 * forth between them, until the output pools are 75%
-		 * full.
-		 */
-		if (entropy_bytes > random_write_wakeup_thresh &&
-		    r->initialized &&
-		    r->entropy_total >= 2*random_read_wakeup_thresh) {
-			static struct entropy_store *last = &blocking_pool;
-			struct entropy_store *other = &blocking_pool;
-
-			if (last == &blocking_pool)
-				other = &nonblocking_pool;
-			if (other->entropy_count <=
-			    3 * other->poolinfo->poolfracbits / 4)
-				last = other;
-			if (last->entropy_count <=
-			    3 * last->poolinfo->poolfracbits / 4) {
-				schedule_work(&last->push_work);
-				r->entropy_total = 0;
-			}
-		}
+	/* should we wake readers? */
+	if (r == &input_pool &&
+	    (entropy_count >> ENTROPY_SHIFT) >= random_read_wakeup_thresh) {
+		wake_up_interruptible(&random_read_wait);
+		kill_fasync(&fasync, SIGIO, POLL_IN);
 	}
 }
 
@@ -734,6 +752,10 @@ static void add_timer_randomness(struct timer_rand_state *state, unsigned num)
 	long delta, delta2, delta3;
 
 	preempt_disable();
+	/* if over the trickle threshold, use only 1 in 4096 samples */
+	if (ENTROPY_BITS(&input_pool) > trickle_thresh &&
+	    ((__this_cpu_inc_return(trickle_count) - 1) & 0xfff))
+		goto out;
 
 	sample.jiffies = jiffies;
 	sample.cycles = random_get_entropy();
@@ -775,6 +797,7 @@ static void add_timer_randomness(struct timer_rand_state *state, unsigned num)
 		credit_entropy_bits(&input_pool,
 				    min_t(int, fls(delta>>1), 11));
 	}
+out:
 	preempt_enable();
 }
 
@@ -865,9 +888,14 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  * from the primary pool to the secondary extraction pool. We make
  * sure we pull enough for a 'catastrophic reseed'.
  */
-static void _xfer_secondary_pool(struct entropy_store *r, size_t nbytes);
 static void xfer_secondary_pool(struct entropy_store *r, size_t nbytes)
 {
+	union {
+		__u32	tmp[OUTPUT_POOL_WORDS];
+		long	hwrand[4];
+	} u;
+	int	i;
+
 	if (r->limit == 0 && random_min_urandom_seed) {
 		unsigned long now = jiffies;
 
@@ -879,57 +907,32 @@ static void xfer_secondary_pool(struct entropy_store *r, size_t nbytes)
 
 	if (r->pull &&
 	    r->entropy_count < (nbytes << (ENTROPY_SHIFT + 3)) &&
-	    r->entropy_count < r->poolinfo->poolfracbits)
-		_xfer_secondary_pool(r, nbytes);
-}
+	    r->entropy_count < r->poolinfo->poolfracbits) {
+		/* If we're limited, always leave two wakeup worth's BITS */
+		int rsvd = r->limit ? 0 : random_read_wakeup_thresh/4;
+		int bytes = nbytes;
 
-static void _xfer_secondary_pool(struct entropy_store *r, size_t nbytes)
-{
-	union {
-		__u32	tmp[OUTPUT_POOL_WORDS];
-		long	hwrand[4];
-	} u;
-	int	i;
+		/* pull at least as many as BYTES as wakeup BITS */
+		bytes = max_t(int, bytes, random_read_wakeup_thresh / 8);
+		/* but never more than the buffer size */
+		bytes = min_t(int, bytes, sizeof(u.tmp));
 
-	/* For /dev/random's pool, always leave two wakeup worth's BITS */
-	int rsvd = r->limit ? 0 : random_read_wakeup_thresh/4;
-	int bytes = nbytes;
+		DEBUG_ENT("going to reseed %s with %d bits "
+			  "(%zu of %d requested)\n",
+			  r->name, bytes * 8, nbytes * 8,
+			  r->entropy_count >> ENTROPY_SHIFT);
 
-	/* pull at least as many as BYTES as wakeup BITS */
-	bytes = max_t(int, bytes, random_read_wakeup_thresh / 8);
-	/* but never more than the buffer size */
-	bytes = min_t(int, bytes, sizeof(u.tmp));
-
-	DEBUG_ENT("going to reseed %s with %d bits (%zu of %d requested)\n",
-		  r->name, bytes * 8, nbytes * 8,
-		  r->entropy_count >> ENTROPY_SHIFT);
-
-	bytes = extract_entropy(r->pull, u.tmp, bytes,
-				random_read_wakeup_thresh / 8, rsvd);
-	mix_pool_bytes(r, u.tmp, bytes, NULL);
-	credit_entropy_bits(r, bytes*8);
+		bytes = extract_entropy(r->pull, u.tmp, bytes,
+					random_read_wakeup_thresh / 8, rsvd);
+		mix_pool_bytes(r, u.tmp, bytes, NULL);
+		credit_entropy_bits(r, bytes*8);
+	}
 	kmemcheck_mark_initialized(&u.hwrand, sizeof(u.hwrand));
 	for (i = 0; i < 4; i++)
 		if (arch_get_random_long(&u.hwrand[i]))
 			break;
 	if (i)
 		mix_pool_bytes(r, &u.hwrand, sizeof(u.hwrand), 0);
-}
-
-/*
- * Used as a workqueue function so that when the input pool is getting
- * full, we can "spill over" some entropy to the output pools.  That
- * way the output pools can store some of the excess entropy instead
- * of letting it go to waste.
- */
-static void push_to_pool(struct work_struct *work)
-{
-	struct entropy_store *r = container_of(work, struct entropy_store,
-					      push_work);
-	BUG_ON(!r);
-	_xfer_secondary_pool(r, random_read_wakeup_thresh/8);
-	trace_push_to_pool(r->name, r->entropy_count >> ENTROPY_SHIFT,
-			   r->pull->entropy_count >> ENTROPY_SHIFT);
 }
 
 /*
