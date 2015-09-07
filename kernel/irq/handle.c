@@ -167,7 +167,7 @@ irqreturn_t
 handle_irq_event_percpu(struct irq_desc *desc, struct irqaction *action)
 {
 	irqreturn_t retval = IRQ_NONE;
-	unsigned int random = 0, irq = desc->irq_data.irq;
+	unsigned int flags = 0, irq = desc->irq_data.irq;
 #ifdef CONFIG_MSM_SM_EVENT
 	sm_msm_irq_data_t sm_irq;
 #endif
@@ -216,7 +216,7 @@ handle_irq_event_percpu(struct irq_desc *desc, struct irqaction *action)
 
 			/* Fall through to add to randomness */
 		case IRQ_HANDLED:
-			random |= action->flags;
+			flags |= action->flags;
 			break;
 
 		default:
@@ -227,8 +227,7 @@ handle_irq_event_percpu(struct irq_desc *desc, struct irqaction *action)
 		action = action->next;
 	} while (action);
 
-	if (random & IRQF_SAMPLE_RANDOM)
-		add_interrupt_randomness(irq);
+	add_interrupt_randomness(irq, flags);
 
 	if (!noirqdebug)
 		note_interrupt(irq, desc, retval);
