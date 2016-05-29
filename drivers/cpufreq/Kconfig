@@ -252,6 +252,12 @@ config CPU_FREQ_DEFAULT_GOV_VIRTOUS
 	help
 	  Use the CPUFreq governor 'virtous' as default.
 
+config CPU_FREQ_DEFAULT_GOV_PEGASUSQ
+	bool "pegasusq"
+	select CPU_FREQ_GOV_PEGASUSQ
+	help
+	  Use the CPUFreq governor 'pegasusq' as default.
+
 endchoice
 
 config CPU_FREQ_GOV_PERFORMANCE
@@ -644,6 +650,9 @@ config CPU_FREQ_GOV_SKYWALKER
 config CPU_FREQ_GOV_SAVAGEDZEN
 	tristate "'savagedzen' cpufreq governor"
 	depends on CPU_FREQ
+
+config CPU_FREQ_GOV_PEGASUSQ
+	tristate "'pegasusq' cpufreq policy governor"
 
 menu "x86 CPU frequency scaling drivers"
 depends on X86
