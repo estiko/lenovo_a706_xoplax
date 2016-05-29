@@ -424,6 +424,9 @@ extern struct cpufreq_governor cpufreq_gov_skywalker;
 #elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_VIRTOUS)
 extern struct cpufreq_governor cpufreq_gov_virtous;
 #define CPUFREQ_DEFAULT_GOVERNOR (&cpufreq_gov_virtous)
+#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_PEGASUSQ)
+extern struct cpufreq_governor cpufreq_gov_pegasusq;
+#define CPUFREQ_DEFAULT_GOVERNOR (&cpufreq_gov_pegasusq)
 #endif
 
 
